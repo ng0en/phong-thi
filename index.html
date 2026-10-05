@@ -278,6 +278,10 @@ table.tbl{border-collapse:collapse;width:100%;font-size:.88rem;min-width:760px}
 .allright{color:var(--ok);font-weight:600}
 .code{font:500 .78rem var(--f-mono);word-break:break-all;background:var(--soft);border:1px dashed var(--line-strong);border-radius:8px;padding:10px 12px;user-select:all;-webkit-user-select:all;margin:10px 0}
 .acts{display:flex;flex-wrap:wrap;gap:8px}
+.send{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:12px 14px;border-radius:10px;background:var(--soft);border:1px solid var(--line);margin-bottom:10px;font-weight:600}
+.send-ok{color:var(--ok)} .send-busy{color:var(--muted)} .send-no{color:var(--warn)}
+.fb-box{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--soft);margin-bottom:16px}
+.fb-box .who{flex:1 1 220px;font-size:.9rem;min-width:0}
 
 /* ---------- overlays ---------- */
 .modal-bg{position:fixed;inset:0;background:var(--scrim);display:grid;place-items:center;padding:16px;z-index:100}
@@ -303,7 +307,15 @@ var TFP=[0,10,25,50,100];
 var PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 var PDFW='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 var FONTS='https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap';
+var DEFAULT_FB={apiKey:"AIzaSyCAfLudsIG9CJPar67ZXoxv-TIBTqrzu1A",authDomain:"phong-thi-97252.firebaseapp.com",projectId:"phong-thi-97252",storageBucket:"phong-thi-97252.firebasestorage.app",messagingSenderId:"943933218707",appId:"1:943933218707:web:36732ad76aec1d4086d266"};
+var FB_SDK='https://www.gstatic.com/firebasejs/10.12.2/';
 var app=document.getElementById('app');
+function fsBase(p){return 'https://firestore.googleapis.com/v1/projects/'+encodeURIComponent(p)+'/databases/(default)/documents/';}
+function fbSend(fb,examId,d){
+  var body={fields:{code:{stringValue:d.code},n:{stringValue:String(d.n||'')},c:{stringValue:String(d.c||'')},at:{integerValue:String(d.at||Date.now())}}};
+  return fetch(fsBase(fb.p)+'exams/'+encodeURIComponent(examId)+'/results?key='+encodeURIComponent(fb.k),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return true;});
+}
 
 /* ---------- helpers ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
@@ -420,7 +432,7 @@ function saveFile(filename,data,mime){
 
 /* ---------- document viewer (PDF / images) ---------- */
 var pdfjsP=null;
-function loadScript(src){return new Promise(function(res,rej){var s=document.createElement('script');s.src=src;s.onload=res;s.onerror=function(){rej(new Error('không tải được thư viện đọc PDF'));};document.head.appendChild(s);});}
+function loadScript(src){return new Promise(function(res,rej){var s=document.createElement('script');s.src=src;s.onload=res;s.onerror=function(){rej(new Error('không tải được '+src.split('/').pop()));};document.head.appendChild(s);});}
 function loadPdfJs(){
   if(!pdfjsP){pdfjsP=(window.pdfjsLib?Promise.resolve():loadScript(PDFJS)).then(function(){return window.pdfjsWorker?null:loadScript(PDFW);}).then(function(){window.pdfjsLib.GlobalWorkerOptions.workerSrc=PDFW;return window.pdfjsLib;});
     pdfjsP.catch(function(){pdfjsP=null;});}
@@ -569,6 +581,7 @@ function StudentApp(exam,opt){
   if(!st||!st.ans)st={name:'',cls:'',start:0,ans:emptyAns(),tabs:0,flags:{},warned:false,done:null};
   if(!st.flags)st.flags={};
   var timerI=null,viewer=null;
+  var useFb=!!(exam.fb&&exam.fb.p&&exam.fb.k),sending=false;
   function save(){if(!preview)store.set(SK,st);}
   function cleanup(){clearInterval(timerI);timerI=null;if(viewer){viewer.destroy();viewer=null;}document.removeEventListener('visibilitychange',onVis);}
 
@@ -684,7 +697,7 @@ function StudentApp(exam,opt){
     var g=grade(key,st.ans),total=exam.dur*60,used=Math.min(total,Math.round((Date.now()-st.start)/1000));
     var p={v:1,i:exam.id,n:st.name,c:st.cls,a:packAns(st.ans),x:st.tabs||0,u:used,at:Date.now(),o:auto?1:0};
     var json=JSON.stringify(p);
-    st.done={code:'PT1.'+b64url(json)+'.'+hash(json+'|'+exam.k),total:g.total,auto:auto,used:used};
+    st.done={code:'PT1.'+b64url(json)+'.'+hash(json+'|'+exam.k),total:g.total,auto:auto,used:used,at:p.at,sent:false};
     save();cleanup();
     document.querySelectorAll('.modal-bg').forEach(function(m){m.remove();});
     if(auto){beep();}
@@ -710,7 +723,8 @@ function StudentApp(exam,opt){
       '<div class="meta">Thời gian làm bài: '+dur(d.used)+(exam.tabw?' · Rời trang: '+(st.tabs||0)+' lần':'')+'</div></div>'+
       '<div class="card"><h2>Các câu sai ('+w.length+')</h2>'+(w.length?'<ul class="wlist">'+w.map(function(x){return '<li><span class="wtag">'+x[0]+'</span><span>'+x[1]+'</span></li>';}).join('')+'</ul>':'<p class="allright">Không sai câu nào. Xuất sắc!</p>')+
       (show?'':'<p class="hint">Giáo viên chưa mở đáp án đúng cho đề này.</p>')+'</div>'+
-      '<div class="card"><h2>Mã kết quả gửi giáo viên</h2><p class="hint" style="margin:0">Sao chép mã dưới đây và gửi cho giáo viên (Zalo, Messenger…). Giáo viên dán mã vào bảng điểm để ghi nhận bài của bạn.</p>'+
+      '<div class="card">'+(useFb?'<h2>Gửi bài cho giáo viên</h2><div class="send" id="send-st" role="status"></div><p class="hint" style="margin:0">Mã dự phòng: nếu bài chưa gửi được, sao chép mã này gửi cho giáo viên (Zalo, Messenger…).</p>':
+      '<h2>Mã kết quả gửi giáo viên</h2><p class="hint" style="margin:0">Sao chép mã dưới đây và gửi cho giáo viên (Zalo, Messenger…). Giáo viên dán mã vào bảng điểm để ghi nhận bài của bạn.</p>')+
       '<div class="code" id="res-code">'+esc(d.code)+'</div><div class="acts"><button type="button" class="btn primary" data-act="copy">Sao chép mã</button><button type="button" class="btn" data-act="review">Xem lại bài làm</button>'+
       (preview?'<button type="button" class="btn" data-act="again">Làm lại (xem thử)</button>':'')+exitBtn()+'</div></div></div>';
     bindExit();
@@ -718,7 +732,28 @@ function StudentApp(exam,opt){
     mount.querySelector('[data-act="review"]').onclick=function(){showExam(true);};
     var ag=mount.querySelector('[data-act="again"]');
     if(ag)ag.onclick=function(){st={name:st.name,cls:st.cls,start:0,ans:emptyAns(),tabs:0,flags:{},warned:false,done:null};showStart();};
+    if(useFb)trySend();
   }
+
+  /* ----- gửi bài lên Firebase ----- */
+  function sendStatus(state){
+    var el=mount.querySelector('#send-st');if(!el)return;
+    if(state==='ok')el.innerHTML='<span class="send-ok">&#10003; Bài đã gửi tới giáo viên.</span>';
+    else if(state==='busy')el.innerHTML='<span class="send-busy">Đang gửi bài…</span>';
+    else if(state==='preview')el.innerHTML='<span class="send-busy">Chế độ xem thử: bài không được gửi lên máy chủ.</span>';
+    else{el.innerHTML='<span class="send-no">Chưa gửi được bài (có thể do mất mạng). Trang sẽ tự thử lại khi có mạng.</span> <button type="button" class="btn sm" id="send-retry">Gửi lại</button>';
+      el.querySelector('#send-retry').onclick=trySend;}
+  }
+  function trySend(){
+    if(!st.done)return;
+    if(preview){sendStatus('preview');return;}
+    if(st.done.sent){sendStatus('ok');return;}
+    if(sending)return;sending=true;sendStatus('busy');
+    fbSend(exam.fb,exam.id,{code:st.done.code,n:st.name,c:st.cls,at:st.done.at}).then(function(){
+      st.done.sent=true;save();sending=false;sendStatus('ok');toast('Đã gửi bài tới giáo viên.');
+    },function(){sending=false;sendStatus('fail');});
+  }
+  if(useFb&&!preview)window.addEventListener('online',function(){if(st.done&&!st.done.sent)trySend();});
 }
 
 /* ================= TEACHER ================= */
@@ -728,7 +763,8 @@ function TeacherApp(){
   if(!T||!T.key)T={id:newId(),title:'',dur:45,show:true,tabw:true,key:emptyAns()};
   var files=null; /* {kind,items,name,size} kept in memory only */
   var tab='make',keySheet=null,mini=null;
-  function saveDraft(){store.set(DK,{id:T.id,title:T.title,dur:T.dur,show:T.show,tabw:T.tabw,key:T.key});}
+  function saveDraft(){store.set(DK,{id:T.id,title:T.title,dur:T.dur,show:T.show,tabw:T.tabw,fb:T.fb!==false,key:T.key});}
+  function fbCfg(){return DEFAULT_FB;}
 
   app.innerHTML='<div class="t-app"><header class="t-head"><div class="brand"><span class="brand-mark">10đ</span><div><div class="brand-n">Phòng Thi Trực Tuyến</div><div class="brand-s">Trang giáo viên · đề 18 + 4 + 6 câu theo cấu trúc THPT</div></div></div>'+
     '<nav class="tabs" role="tablist"><button type="button" data-tab="make">Soạn đề</button><button type="button" data-tab="grade">Bảng điểm</button><button type="button" data-tab="help">Hướng dẫn</button></nav></header><main id="t-main"></main></div>';
@@ -750,7 +786,8 @@ function TeacherApp(){
       '<div class="field"><label class="lbl" for="t-dur">Thời gian làm bài (phút)</label><div class="dur"><input class="inp" id="t-dur" type="number" min="1" max="300" value="'+T.dur+'">'+
       [15,45,50,90].map(function(m){return '<button type="button" class="pill" data-dur="'+m+'">'+m+'′</button>';}).join('')+'</div></div>'+
       '<label class="sw"><input type="checkbox" id="t-show"'+(T.show?' checked':'')+'><span>Hiện đáp án đúng sau khi nộp<small>Tắt nếu đề còn dùng cho lớp khác. Câu sai vẫn luôn được báo.</small></span></label>'+
-      '<label class="sw"><input type="checkbox" id="t-tabw"'+(T.tabw?' checked':'')+'><span>Cảnh báo khi học sinh rời trang làm bài<small>Số lần rời trang được ghi vào mã kết quả.</small></span></label></section>'+
+      '<label class="sw"><input type="checkbox" id="t-tabw"'+(T.tabw?' checked':'')+'><span>Cảnh báo khi học sinh rời trang làm bài<small>Số lần rời trang được ghi vào mã kết quả.</small></span></label>'+
+      '<label class="sw"><input type="checkbox" id="t-fb"'+(T.fb!==false?' checked':'')+'><span>Tự gửi bài lên Firebase khi học sinh nộp<small>Dự án <span class="mono">'+esc(fbCfg().projectId)+'</span>. Tải bài về ở tab Bảng điểm.</small></span></label></section>'+
       '<section class="panel"><h2><span class="step">02</span>File đề</h2>'+
       '<label class="drop" id="drop" for="t-file"><b>Chọn hoặc kéo thả file đề vào đây</b><span>Một file PDF, hoặc nhiều ảnh chụp (mỗi ảnh một trang, theo thứ tự tên file)</span></label>'+
       '<input type="file" id="t-file" accept="application/pdf,image/*" multiple hidden>'+
@@ -775,6 +812,7 @@ function TeacherApp(){
     setDur(T.dur);
     $('#t-show').onchange=function(e){T.show=e.target.checked;saveDraft();};
     $('#t-tabw').onchange=function(e){T.tabw=e.target.checked;saveDraft();};
+    $('#t-fb').onchange=function(e){T.fb=e.target.checked;saveDraft();};
 
     var drop=$('#drop'),fin=$('#t-file');
     fin.onchange=function(){if(fin.files.length)loadFiles(Array.from(fin.files));fin.value='';};
@@ -796,14 +834,14 @@ function TeacherApp(){
     };
     $('#t-new').onclick=function(){
       modal({title:'Soạn đề mới?',body:'<p>Tên đề, đáp án và file đề đang soạn sẽ được xóa khỏi trang này. Các file đã xuất và bảng điểm không bị ảnh hưởng.</p>',
-        actions:[{label:'Hủy'},{label:'Soạn đề mới',kind:'primary',onClick:function(){T={id:newId(),title:'',dur:T.dur,show:T.show,tabw:T.tabw,key:emptyAns()};files=null;saveDraft();render();}}]});
+        actions:[{label:'Hủy'},{label:'Soạn đề mới',kind:'primary',onClick:function(){T={id:newId(),title:'',dur:T.dur,show:T.show,tabw:T.tabw,fb:T.fb,key:emptyAns()};files=null;saveDraft();render();}}]});
     };
     $('#t-open').onclick=function(){$('#t-open-f').click();};
     $('#t-open-f').onchange=function(e){var f=e.target.files[0];e.target.value='';if(!f)return;
       var r=new FileReader();r.onload=function(){
         var m=/<script type="application\/json" id="exam-data">([\s\S]*?)<\/script>/.exec(r.result);
         try{if(!m)throw 0;var ex=JSON.parse(m[1]);var k=dec(ex.k,'pt:'+ex.id);
-          T={id:ex.id,title:ex.title||'',dur:ex.dur||45,show:!!ex.show,tabw:!!ex.tabw,key:k};files={kind:ex.files.kind,items:ex.files.items,name:f.name,size:f.size};
+          T={id:ex.id,title:ex.title||'',dur:ex.dur||45,show:!!ex.show,tabw:!!ex.tabw,fb:!!ex.fb,key:k};files={kind:ex.files.kind,items:ex.files.items,name:f.name,size:f.size};
           saveDraft();rememberExam(ex);render();toast('Đã mở lại đề “'+(ex.title||f.name)+'”. Sửa xong bấm Xuất file để tạo bản mới.');
         }catch(x){toast('File này không phải file đề do trang này xuất ra.');}
       };r.readAsText(f);};
@@ -858,7 +896,7 @@ function TeacherApp(){
     });
   }
 
-  function buildExam(){return {v:1,id:T.id,title:T.title.trim()||'Đề kiểm tra',dur:T.dur,show:!!T.show,tabw:!!T.tabw,files:{kind:files.kind,items:files.items},k:enc(T.key,'pt:'+T.id)};}
+  function buildExam(){return {v:1,id:T.id,title:T.title.trim()||'Đề kiểm tra',dur:T.dur,show:!!T.show,tabw:!!T.tabw,files:{kind:files.kind,items:files.items},k:enc(T.key,'pt:'+T.id),fb:T.fb!==false?{p:fbCfg().projectId,k:fbCfg().apiKey}:null};}
   function rememberExam(ex){var all=store.get(EK,{});all[ex.id]={title:ex.title,k:ex.k,dur:ex.dur,at:Date.now()};store.set(EK,all);}
 
   function buildHtml(ex){
@@ -878,7 +916,7 @@ function TeacherApp(){
     var ex=buildExam();rememberExam(ex);
     var name=(ex.title.normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'')||'de-thi')+'.html';
     saveFile(name,buildHtml(ex),'text/html').then(function(s){
-      if(s==='saved')modal({title:'Đã xuất file đề',body:'<p><b class="mono">'+esc(name)+'</b> chứa đề, đồng hồ '+ex.dur+' phút và đáp án đã mã hóa.</p><ul><li>Gửi file cho học sinh qua Zalo/Drive, hoặc đưa lên GitHub Pages để học sinh mở bằng đường link.</li><li>Học sinh nộp bài xong sẽ nhận một mã kết quả. Thu mã và dán vào tab <b>Bảng điểm</b>.</li><li>Đáp án đề này đã lưu trên trình duyệt này để chấm mã. Nếu đổi máy, bấm “Mở file đề đã xuất”.</li></ul>'});
+      if(s==='saved')modal({title:'Đã xuất file đề',body:'<p><b class="mono">'+esc(name)+'</b> chứa đề, đồng hồ '+ex.dur+' phút và đáp án đã mã hóa.</p><ul><li>Gửi file cho học sinh qua Zalo/Drive, hoặc đưa lên GitHub Pages để học sinh mở bằng đường link.</li>'+(ex.fb?'<li>Học sinh nộp bài, bài tự gửi lên Firebase. Vào tab <b>Bảng điểm</b>, đăng nhập Google và bấm “Tải bài nộp từ Firebase”.</li>':'<li>Học sinh nộp bài xong sẽ nhận một mã kết quả. Thu mã và dán vào tab <b>Bảng điểm</b>.</li>')+'<li>Đáp án đề này đã lưu trên trình duyệt này để chấm mã. Nếu đổi máy, bấm “Mở file đề đã xuất”.</li></ul>'});
       else if(s==='declined')toast('Đã hủy tải file.');
       else toast('Không tải được file trong khung xem này. Hãy mở trang ở trình duyệt rồi thử lại.');
     });
@@ -890,15 +928,66 @@ function TeacherApp(){
     var exams=store.get(EK,{}),res=store.get(RK,{});
     var ids=Object.keys(exams).sort(function(a,b){return (exams[b].at||0)-(exams[a].at||0);});
     if(!gExam||!exams[gExam])gExam=ids.find(function(id){return (res[id]||[]).length;})||ids[0]||null;
-    main.innerHTML='<div class="g-wrap"><section class="panel g-in"><h2>Nhập mã kết quả</h2>'+
+    main.innerHTML='<div class="g-wrap"><section class="panel g-in"><h2>Thu bài</h2>'+
+      '<div class="fb-box"><span class="who" id="fb-who">Đang kết nối Firebase…</span><button type="button" class="btn" id="fb-login" hidden>Đăng nhập Google</button><button type="button" class="btn primary" id="fb-pull" hidden>Tải bài nộp từ Firebase</button><button type="button" class="btn ghost sm" id="fb-out" hidden>Đăng xuất</button></div>'+
+      '<label class="lbl" for="g-in">Hoặc dán mã kết quả học sinh gửi</label>'+
       '<textarea class="inp" id="g-in" rows="4" placeholder="Dán một hoặc nhiều mã PT1.… vào đây. Có thể dán cả đoạn tin nhắn, trang tự tìm mã."></textarea>'+
       '<div class="row"><button type="button" class="btn primary" id="g-add">Thêm vào bảng điểm</button><span class="msg" id="g-msg" role="status"></span></div></section>'+
       '<section class="panel" id="g-body"></section></div>';
-    main.querySelector('#g-add').onclick=addCodes;
+    main.querySelector('#g-add').onclick=function(){addCodes(main.querySelector('#g-in').value);main.querySelector('#g-in').value='';};
     drawBook(exams,res,ids);
+    initFb();
   }
-  function addCodes(){
-    var txt=main.querySelector('#g-in').value,codes=txt.match(/PT1\.[A-Za-z0-9_-]+\.[a-z0-9]+/g)||[],msg=main.querySelector('#g-msg');
+  var fbUnsub=null;
+  function setMsg(t,ok){var m=main.querySelector('#g-msg');if(m){m.className='msg '+(ok?'ok':'no');m.textContent=t;}}
+  function initFb(){
+    var who=main.querySelector('#fb-who'),lg=main.querySelector('#fb-login'),pull=main.querySelector('#fb-pull'),out=main.querySelector('#fb-out');
+    if(fbUnsub){fbUnsub();fbUnsub=null;}
+    fbAuth().then(function(auth){
+      fbUnsub=auth.onAuthStateChanged(function(u){
+        if(!who.isConnected)return;
+        who.innerHTML=u?'Đã đăng nhập: <b>'+esc(u.email)+'</b>':'Đăng nhập Google để tải bài học sinh đã nộp lên Firebase.';
+        lg.hidden=!!u;pull.hidden=!u;out.hidden=!u;
+      });
+      lg.onclick=function(){auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(function(e){
+        setMsg(e&&e.code==='auth/unauthorized-domain'?'Tên miền '+location.hostname+' chưa có trong Authentication → Settings → Authorized domains.':(e&&e.code==='auth/popup-closed-by-user'?'Đã đóng cửa sổ đăng nhập.':'Đăng nhập không thành công ('+(e&&(e.code||e.message))+').'),false);});};
+      out.onclick=function(){auth.signOut();};
+      pull.onclick=function(){pullFb(auth,pull);};
+    },function(){
+      who.textContent='Không kết nối được Firebase ở khung xem này. Mở trang giáo viên trên GitHub Pages để tải bài; vẫn có thể dán mã bên dưới.';
+    });
+  }
+  var fbAuthP=null;
+  function fbAuth(){
+    if(!fbAuthP){fbAuthP=(window.firebase?Promise.resolve():loadScript(FB_SDK+'firebase-app-compat.js')).then(function(){return firebase.auth?null:loadScript(FB_SDK+'firebase-auth-compat.js');})
+      .then(function(){if(!firebase.apps.length)firebase.initializeApp(fbCfg());return firebase.auth();});
+      fbAuthP.catch(function(){fbAuthP=null;});}
+    return fbAuthP;
+  }
+  function pullFb(auth,btn){
+    var u=auth.currentUser;if(!u)return;
+    var ids=Object.keys(store.get(EK,{}));
+    if(!ids.length){setMsg('Chưa có đề nào trên máy này. Xuất đề hoặc mở lại file đề ở tab Soạn đề trước.',false);return;}
+    btn.disabled=true;setMsg('Đang tải bài nộp…',true);
+    u.getIdToken().then(function(tok){
+      var codes=[];
+      function page(id,pt){
+        return fetch(fsBase(fbCfg().projectId)+'exams/'+encodeURIComponent(id)+'/results?pageSize=300'+(pt?'&pageToken='+encodeURIComponent(pt):''),{headers:{Authorization:'Bearer '+tok}})
+          .then(function(r){if(r.status===403)throw new Error('403');if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+          .then(function(j){(j.documents||[]).forEach(function(d){var f=d.fields&&d.fields.code;if(f&&f.stringValue)codes.push(f.stringValue);});return j.nextPageToken?page(id,j.nextPageToken):null;});
+      }
+      return ids.reduce(function(p,id){return p.then(function(){return page(id);});},Promise.resolve()).then(function(){return codes;});
+    }).then(function(codes){
+      btn.disabled=false;
+      if(!codes.length){setMsg('Chưa có bài nộp nào trên Firebase cho các đề trên máy này.',false);return;}
+      addCodes(codes.join('\n'),true);
+    },function(e){
+      btn.disabled=false;
+      setMsg(e&&e.message==='403'?'Tài khoản '+u.email+' chưa có quyền đọc. Kiểm tra email giáo viên trong Rules của Firestore.':'Không tải được bài ('+(e&&e.message||e)+').',false);
+    });
+  }
+  function addCodes(txt,fromFb){
+    var codes=txt.match(/PT1\.[A-Za-z0-9_-]+\.[a-z0-9]+/g)||[],msg=main.querySelector('#g-msg');
     if(!codes.length){msg.className='msg no';msg.textContent='Không thấy mã nào bắt đầu bằng PT1.';return;}
     var exams=store.get(EK,{}),res=store.get(RK,{}),add=0,dup=0,noexam=0,bad=0,last=null;
     codes.forEach(function(code){
@@ -911,11 +1000,10 @@ function TeacherApp(){
     });
     store.set(RK,res);
     if(last)gExam=last;
-    main.querySelector('#g-in').value='';
-    var parts=[];if(add)parts.push('Đã thêm '+add+' bài');if(dup)parts.push(dup+' mã đã có');if(noexam)parts.push(noexam+' mã thuộc đề chưa có đáp án trên máy này (mở file đề ở tab Soạn đề)');if(bad)parts.push(bad+' mã bị lỗi');
+    var parts=[];if(add)parts.push((fromFb?'Firebase: thêm ':'Đã thêm ')+add+' bài mới');if(dup)parts.push(dup+' bài đã có trong bảng');if(noexam)parts.push(noexam+' mã thuộc đề chưa có đáp án trên máy này (mở file đề ở tab Soạn đề)');if(bad)parts.push(bad+' mã bị lỗi');
     var ids=Object.keys(exams).sort(function(a,b){return (exams[b].at||0)-(exams[a].at||0);});
     drawBook(exams,res,ids);
-    msg=main.querySelector('#g-msg');msg.className='msg '+(add?'ok':'no');msg.textContent=parts.join(' · ')+'.';
+    msg=main.querySelector('#g-msg');msg.className='msg '+((add||dup)&&!bad&&!noexam?'ok':'no');msg.textContent=parts.join(' · ')+'.';
   }
   function rowsFor(id,exams,res){
     var ex=exams[id];if(!ex)return [];var key;try{key=dec(ex.k,'pt:'+id);}catch(e){return [];}
@@ -959,7 +1047,7 @@ function TeacherApp(){
       '<li><b>Xem thử</b> để làm bài như học sinh, kiểm tra đáp án và cách chấm.</li>'+
       '<li><b>Xuất file cho học sinh.</b> Trang tạo ra một file .html chứa đề, đồng hồ và đáp án đã mã hóa. Học sinh mở file bằng trình duyệt (Chrome, Safari), không cần cài gì, chỉ cần mạng để tải phông chữ và trình đọc PDF.</li>'+
       '<li><b>Phát đề.</b> Cách gọn nhất là đưa file lên GitHub Pages hoặc Netlify Drop rồi gửi đường link. Gửi file qua Zalo/Drive cũng được, nhưng học sinh nên bấm “Mở bằng trình duyệt”.</li>'+
-      '<li><b>Thu bài.</b> Nộp xong học sinh thấy điểm, câu sai và một mã kết quả. Thu mã qua nhóm Zalo, dán vào tab Bảng điểm: trang chấm lại từ bài làm, ra phổ điểm và tỉ lệ đúng từng câu.</li></ol>'+
+      '<li><b>Thu bài.</b> Nộp xong học sinh thấy điểm và câu sai; bài tự gửi lên Firebase. Ở tab Bảng điểm, đăng nhập Google rồi bấm “Tải bài nộp từ Firebase”. Bài nào gửi không được (học sinh mất mạng) thì học sinh gửi mã dự phòng, thầy/cô dán vào ô bên dưới. Trang chấm lại từ bài làm, ra phổ điểm và tỉ lệ đúng từng câu.</li></ol>'+
       '<h2 style="margin-top:22px">Cách tính điểm</h2><p>Phần I và Phần III: 0,25 điểm mỗi câu. Phần II mỗi câu: đúng 1 ý 0,1 · 2 ý 0,25 · 3 ý 0,5 · 4 ý 1 điểm. Tổng 18 × 0,25 + 4 × 1 + 6 × 0,25 = 10 điểm.</p>'+
       '<h2 style="margin-top:22px">Lưu ý</h2><p>Đáp án trong file học sinh được mã hóa nhẹ, đủ để học sinh không đọc được bằng mắt, nhưng người rành máy tính vẫn có thể giải ra. Với bài kiểm tra quan trọng nên cho làm tại lớp. Đáp án và bảng điểm của giáo viên chỉ lưu trên trình duyệt này; đổi máy thì mở lại file đề đã xuất.</p></section>';
   }
